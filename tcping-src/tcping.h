@@ -1,6 +1,6 @@
 extern int DoWinsock_Single(
 	char* pcHost,
-	int nPort,
+	std::list<int> nPort,
 	int times_to_ping,
 	double ping_interval,
 	int include_timestamp,
@@ -35,7 +35,7 @@ extern int DoWinsock_Single(
 
 extern int DoWinsock_Multi(
 	char* pcHost,
-	int nPort,
+	std::list<int> nPort,
 	int times_to_ping,
 	double ping_interval,
 	int include_timestamp,

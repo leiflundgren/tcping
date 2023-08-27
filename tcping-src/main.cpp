@@ -40,9 +40,11 @@ const char *TCPING_DATE = "Dec 30 2017";
 #include <stdlib.h>
 #include <iostream>
 #include <time.h>
+#include <list>
 
 #include "tee.h"
 #include "tcping.h"
+#include "main.h"
 
 
 using namespace std;
@@ -101,6 +103,65 @@ void usage(int argc, char* argv[]) {
 
 }
 
+static std::list<int> parse_ports(const char* s)
+{
+
+	std::list<int> res;
+
+	bool empty = true;
+	int sign = 1;
+	int n = 0;
+	for (;;++s)
+	{
+		if (*s == '\0')
+			break;
+
+		switch ( *s )
+		{ 
+		case ',':
+			if (!empty)
+				res.push_back(sign * n); 
+			n = 0;
+			sign = 1;
+			empty = true;
+			break;
+
+		case '-':
+			sign = -1;
+			n = 0;
+			empty = false;
+			break;
+		case '+':
+			sign = 1;
+			n = 0;
+			empty = false;
+			break;
+
+
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			n = 10 * n + (*s - '0');
+			empty = false;
+			break;
+
+		default:
+			break;
+		}
+
+	}
+
+	if (!empty)
+		res.push_back(sign * n);
+	return res;
+}
 
 int main(int argc, char* argv[]) {
 
@@ -168,7 +229,7 @@ int main(int argc, char* argv[]) {
 	int use_source_address = 0;
 	char* src_address = "";
 
-	int nPort = kDefaultServerPort;
+	std::list<int> ports;
 
 	int always_print_domain = 0;
 
@@ -245,7 +306,7 @@ int main(int argc, char* argv[]) {
 		}
 
 		if (!strcmp(argv[x], "-p")) {
-			nPort = atoi(argv[x + 1]);
+			ports = parse_ports(argv[x + 1]);
 			offset = x + 1;
 		}
 
@@ -495,8 +556,11 @@ int main(int argc, char* argv[]) {
 
     
 	// allow the -p option to win if we set it
-    if (argc >= 3 + offset && nPort == kDefaultServerPort) {
-        nPort = atoi(argv[2 + offset]);
+	if (argc >= 3 + offset)
+	{
+		auto arg_ports = parse_ports(argv[2 + offset]);
+		if (!arg_ports.empty())
+			ports = arg_ports;
     }
 
     // Do a little sanity checking because we're anal.
@@ -547,14 +611,14 @@ int main(int argc, char* argv[]) {
 	out.p("\n");
 
 	if (!reading_from_file) {
-		retval = DoWinsock_Single(pcHost, nPort, times_to_ping, ping_interval, include_timestamp, beep_mode, ping_timeout, relookup_interval, auto_exit_on_success, force_send_byte, include_url, use_http, docptr, http_cmd, include_jitter, jitter_sample_size, logfile, use_logfile, ipv, proxy_server, proxy_port, using_credentials, proxy_credentials, only_changes, no_statistics, giveup_count, out, use_source_address, src_address, blocking, always_print_domain, use_color);
+		retval = DoWinsock_Single(pcHost, ports, times_to_ping, ping_interval, include_timestamp, beep_mode, ping_timeout, relookup_interval, auto_exit_on_success, force_send_byte, include_url, use_http, docptr, http_cmd, include_jitter, jitter_sample_size, logfile, use_logfile, ipv, proxy_server, proxy_port, using_credentials, proxy_credentials, only_changes, no_statistics, giveup_count, out, use_source_address, src_address, blocking, always_print_domain, use_color);
 	}
 	else {
 		if (file_loop_count_was_specific) {
 			file_times_to_loop = times_to_ping;
 		}
 		times_to_ping = 1;
-		retval = DoWinsock_Multi(pcHost, nPort, times_to_ping, ping_interval, include_timestamp, beep_mode, ping_timeout, relookup_interval, auto_exit_on_success, force_send_byte, include_url, use_http, docptr, http_cmd, include_jitter, jitter_sample_size, logfile, use_logfile, ipv, proxy_server, proxy_port, using_credentials, proxy_credentials, only_changes, no_statistics, giveup_count, file_times_to_loop, urlfile, out, use_source_address, src_address, blocking, always_print_domain, use_color);
+		retval = DoWinsock_Multi(pcHost, ports, times_to_ping, ping_interval, include_timestamp, beep_mode, ping_timeout, relookup_interval, auto_exit_on_success, force_send_byte, include_url, use_http, docptr, http_cmd, include_jitter, jitter_sample_size, logfile, use_logfile, ipv, proxy_server, proxy_port, using_credentials, proxy_credentials, only_changes, no_statistics, giveup_count, file_times_to_loop, urlfile, out, use_source_address, src_address, blocking, always_print_domain, use_color);
 	}
 
     // Shut Winsock back down and take off.

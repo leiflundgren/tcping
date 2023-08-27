@@ -27,6 +27,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\tcping-src\base64.h" />
+    <ClInclude Include="..\tcping-src\main.h" />
     <ClInclude Include="..\tcping-src\tcping.h" />
     <ClInclude Include="..\tcping-src\tee.h" />
     <ClInclude Include="..\tcping-src\ws-util.h" />

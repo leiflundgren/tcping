@@ -41,6 +41,7 @@ This application includes public domain code from the Winsock Programmer's FAQ:
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <list>
 
 #include "tee.h"
 #include "ws-util.h"
@@ -203,7 +204,7 @@ void COLOR_RED(int use_color) {
 }
 
 
-int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
+int DoWinsock(char* pcHost, std::list<int> ports, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
 
 	COLOR_RESET(use_color);
 	
@@ -217,8 +218,8 @@ int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, 
 		
 		sprintf_s(web_server, sizeof(web_server), "%s", pcHost);
 		//@@ Fix this later.  sprintf_s wasn't happy, so we went back and disabled the warnings just for this one
-		sprintf(pcHost, "%s", proxy_server);
-		nPort = proxy_port;
+		sprintf_s(pcHost, sizeof(pcHost), "%s", proxy_server);
+		ports = std::list<int>{ proxy_port };
 		using_proxy = 1;
 	}
 
@@ -226,7 +227,7 @@ int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, 
 	if (using_credentials == 1) {
 		const std::string s(proxy_credentials);
 		std::string encoded = base64_encode(reinterpret_cast<const unsigned char*>(s.c_str()), s.length());
-		sprintf(hashed_credentials, "%s", encoded.c_str());
+		strncpy_s(hashed_credentials, encoded.c_str(), encoded.size());
 	}
 
 
@@ -294,11 +295,11 @@ int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, 
 	int number_same_cycles = 0;
 
 	ADDRINFO hint, *AddrInfo, *AI;
-	char p[6];
+	char p[17];
 	int r;
 	int found;
 
-	sprintf_s(p, sizeof(p), "%d", nPort);
+	sprintf_s(p, sizeof(p), "%d", ports.front());
     memset(&hint, 0, sizeof (hint));
     hint.ai_family = PF_UNSPEC;
     hint.ai_socktype = SOCK_STREAM;
@@ -372,361 +373,380 @@ int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, 
 	}
 
 	int errorcode_stash = 0;
+		
 
-    while ((loopcounter < times_to_ping || times_to_ping == -1) && CTRL_C_ABORT == 0 ) {
+	while ((loopcounter < times_to_ping || times_to_ping == -1) && CTRL_C_ABORT == 0) {
 
-        success_flag = 0;
+		for (auto it = ports.begin(), end=ports.end(); it != end; /*incr at end-of-loop*/)
+		{
+			int nPort = *it;
 
-        if (((number_of_pings % relookup_interval == 0) && (relookup_interval != -1) && number_of_pings > 0) || have_valid_target == 0) {
-			//freeaddrinfo(AddrInfo);   // freeing from the previous cycle @@ don't know if this works this thing still seems to leak
-			// Find the server's address
-			// Duplicate code here because dealing with resource leaks, getaddrinfo and the
-			// differing IPV4 vs IPV6 structures was just obnoxious.
-			found = 0;
-			r = getaddrinfo(pcHost, p, &hint, &AddrInfo);
+			success_flag = 0;
 
-			if (r != 0) {
-				out.pf("DNS: Could not find host - %s\n", pcHost);
-				have_valid_target = 0;
+			if (((number_of_pings % relookup_interval == 0) && (relookup_interval != -1) && number_of_pings > 0) || have_valid_target == 0) {
+				//freeaddrinfo(AddrInfo);   // freeing from the previous cycle @@ don't know if this works this thing still seems to leak
+				// Find the server's address
+				// Duplicate code here because dealing with resource leaks, getaddrinfo and the
+				// differing IPV4 vs IPV6 structures was just obnoxious.
+				found = 0;
+				r = getaddrinfo(pcHost, p, &hint, &AddrInfo);
+
+				if (r != 0) {
+					out.pf("DNS: Could not find host - %s\n", pcHost);
+					have_valid_target = 0;
+				}
+				for (AI = AddrInfo; AI != NULL; AI = AI->ai_next) {
+					if ((AI->ai_family == AF_UNSPEC && ipv == 0) ||
+						(AI->ai_family == AF_INET && ipv != 6) ||
+						(AI->ai_family == AF_INET6 && ipv != 4)) {
+
+						have_valid_target = 1;
+						found = 1;
+						std::string abuffer;
+						formatIP(abuffer, AI);
+						out.pf("DNS: %s is %s\n", pcHost, abuffer.c_str());
+						break;
+					}
+					if (found == 0) {
+						out.pf("DNS: No valid host found in AddrInfo for that type\n");
+					}
+				}
 			}
-			for (AI = AddrInfo; AI !=NULL; AI=AI->ai_next) {
-				if ( (AI->ai_family == AF_UNSPEC && ipv == 0) ||
-				     (AI->ai_family == AF_INET && ipv != 6) ||
-				     (AI->ai_family == AF_INET6 && ipv != 4) ) {
-				
-					have_valid_target = 1;
-					found = 1;
+
+			if (include_timestamp == 1) {
+				errno_t err;
+				//_strtime( timeStr );
+				_strtime_s(timeStr, sizeof(timeStr));
+
+				time(&rawtime);
+
+				//timeinfo = localtime ( &rawtime );
+				err = localtime_s(&timeinfo, &rawtime);
+
+				strftime(dateStr, 11, "%Y:%m:%d", &timeinfo);
+				out.pf("%s %s ", dateStr, timeStr);
+			}
+
+			if (have_valid_target == 1) {
+
+				SOCKET sd;
+
+				// apparently... QueryPerformanceCounter isn't thread safe unless we do this
+				SetThreadAffinityMask(GetCurrentThread(), 1);
+
+				// start the timer right before we do the connection
+				QueryPerformanceFrequency((LARGE_INTEGER*)&cpu_frequency);
+				QueryPerformanceCounter((LARGE_INTEGER*)&response_timer1);
+
+				// Connect to the server
+				if (use_http == 0) {
+					sd = EstablishConnection(AI, ping_timeout, force_send_byte, SRCAI, errorcode_stash, blocking);
+				}
+				else {
+					sd = HTTP_EstablishConnection(AI, SRCAI);
+				}
+
+				// grab the timeout as early as possible
+				QueryPerformanceCounter((LARGE_INTEGER*)&response_timer2);
+
+				if (sd == INVALID_SOCKET) {
+
+					if (only_changes == 1) {
+						if (last_cycle_success == false)
+						{
+							// no change, so kill the output
+							out.enable(false);
+							number_same_cycles += 1;
+						}
+						else {
+							out.enable(true);
+							if (number_of_pings > 0) {
+								out.pf("(%d successful)\n", number_same_cycles);
+							}
+							number_same_cycles = 0;
+						}
+						last_cycle_success = false;
+					}
 					std::string abuffer;
 					formatIP(abuffer, AI);
-					out.pf("DNS: %s is %s\n", pcHost, abuffer.c_str());
+
+					COLOR_RED(use_color);
+					if (always_print_domain == 0) {
+						out.pf("Probing %s:%d/tcp - ", abuffer.c_str(), nPort);
+					}
+					else {
+						out.pf("Probing %s:%d/tcp - ", pcHost, nPort);
+					}
+
+					//if (WSAGetLastError() != 0) {
+					if (errorcode_stash != 0) {
+						out.p(WSAGetLastErrorMessage("", errorcode_stash));
+
+					}
+					else {
+						out.p("No response");
+					}
+					failure_counter++;
+					sequential_failure_counter++;
+
+					if (beep_mode == 4 || beep_mode == 1 || (beep_mode == 3 && beep_flag == 1)) {
+						cout << " " << char(7) << "*" << char(7) << "*";
+					}
+					beep_flag = 0;
+				}
+				else {
+
+					if (only_changes == 1) {
+						if (last_cycle_success == true)
+						{
+							// no change, so kill the output
+
+							out.enable(false);
+							number_same_cycles += 1;
+						}
+						else {
+							out.enable(true);
+							if (number_of_pings > 0) {
+								out.pf("(%d unsuccessful)\n", number_same_cycles);
+							}
+
+							number_same_cycles = 0;
+						}
+						last_cycle_success = true;
+						sequential_failure_counter = 0;
+					}
+
+					std::string abuffer;
+					formatIP(abuffer, AI);
+
+					if (always_print_domain == 0) {
+						out.pf("Probing %s:%d/tcp - ", abuffer.c_str(), nPort);
+					}
+					else {
+						out.pf("Probing %s:%d/tcp - ", pcHost, nPort);
+					}
+
+					if (use_http == 0) {
+						out.p("Port is open");
+						success_counter++;
+						success_flag = 1;
+					}
+					else {
+						// consider only incrementing if http response @@
+						out.p("HTTP is open");
+						success_counter++;
+						success_flag = 1;
+
+						// send http send/response
+						SetThreadAffinityMask(GetCurrentThread(), 1);
+
+						QueryPerformanceFrequency((LARGE_INTEGER*)&cpu_frequency);
+						QueryPerformanceCounter((LARGE_INTEGER*)&http_timer1);
+
+						SendHttp(sd, web_server, docptr, http_cmd, using_proxy, using_credentials, hashed_credentials);
+						ReadReply(sd, bytes_received, http_status);
+						QueryPerformanceCounter((LARGE_INTEGER*)&http_timer2);
+						closesocket(sd);
+					}
+
+					if (beep_mode == 4 || beep_mode == 2 || (beep_mode == 3 && beep_flag == 0)) {
+						cout << " *" << char(7);
+					}
+					beep_flag = 1;
+				}
+				// Shut connection down
+				if (ShutdownConnection(sd)) {
+					// room here for connection shutdown success check...
+				}
+				else {
+					// room here for connection shutdown failure check...
+				}
+
+				response_time = ((double)((response_timer2.QuadPart - response_timer1.QuadPart) * (double)1000.0 / (double)cpu_frequency.QuadPart));
+				http_response_time = ((double)((http_timer2.QuadPart - http_timer1.QuadPart) * (double)1000.0 / (double)cpu_frequency.QuadPart));
+
+				out.pf(" - time=%0.3fms ", response_time);
+
+				if (use_http == 1) {
+					if (include_url == 1) {
+						if (docptr != NULL) {
+							out.pf("page:http://%s/%s ", pcHost, docptr);
+						}
+						else {
+							out.pf("page:http://%s ", pcHost);
+						}
+					}
+
+					out.pf("rcv_time=%0.3f status=%d bytes=%d ", http_response_time, http_status, bytes_received);
+
+					bps = bytes_received * 1000 / http_response_time;
+					bps = bps * 8 / 1000;
+
+					out.pf("kbit/s=~%0.3f ", bps);
+				}
+
+
+				// Calculate the statistics...
+				number_of_pings++;
+
+				if (sd != INVALID_SOCKET) {
+					running_total_ms += response_time;
+
+					if (response_time < lowest_ping) {
+						lowest_ping = response_time;
+					}
+
+					if (response_time > max_ping) {
+						max_ping = response_time;
+					}
+
+					if (use_http == 1) {
+
+						running_total_ms_http += http_response_time;
+
+						if (http_response_time < lowest_ping_http) {
+							lowest_ping_http = http_response_time;
+						}
+
+						if (http_response_time > max_ping_http) {
+							max_ping_http = http_response_time;
+						}
+					}
+				}
+
+				/*
+				  Two ways to measure jitter.  If jitter_sample_size == 0, then its a total/times, non inclusive of the current go.
+				  Otherwise, we calculate it based on the prior [jitter_sample_size] values, non inclusive.
+				 */
+
+				if (include_jitter == 1 && success_counter > 1) {
+					if (jitter_sample_size == 0) {
+						// we didn't specify a sample size, so no rolling average
+
+						current_jitter = response_time - ((running_total_ms - response_time) / (success_counter - 1));
+
+						//out.pf("jitter=%0.3f ", response_time - ((running_total_ms - response_time) / (success_counter - 1)));
+						out.pf("jitter=%0.3f ", current_jitter);
+
+						if (max_abs_jitter < abs(current_jitter)) {
+							max_abs_jitter = abs(current_jitter);
+						}
+
+						if (lowest_abs_jitter > abs(current_jitter)) {
+							lowest_abs_jitter = abs(current_jitter);
+						}
+
+						running_total_abs_jitter += abs(current_jitter);
+
+						if (use_http == 1) {
+
+							current_http_jitter = http_response_time - ((running_total_ms_http - http_response_time) / (success_counter - 1));
+							//out.pf("rcv_jitter=%0.3f ", http_response_time - ((running_total_ms_http - http_response_time) / (success_counter - 1)));
+							out.pf("rcv_jitter=%0.3f ", current_http_jitter);
+
+							if (max_abs_http_jitter < abs(current_http_jitter)) {
+								max_abs_http_jitter = abs(current_http_jitter);
+							}
+
+							if (lowest_abs_http_jitter > abs(current_http_jitter)) {
+								lowest_abs_http_jitter = abs(current_http_jitter);
+							}
+
+							running_total_abs_http_jitter += abs(current_http_jitter);
+						}
+
+					}
+					else {
+
+						j = 0;
+
+						for (int x = 0; x < min(jitter_sample_size, success_counter - 1); x++) {
+
+							j = j + jitterbuffer[x];
+
+						}
+						current_jitter = response_time - (j / min(success_counter - 1, jitter_sample_size));
+						//out.pf("jitter=%0.3f ", response_time - (j / min(success_counter - 1, jitter_sample_size)));
+						out.pf("jitter=%0.3f ", current_jitter);
+
+						if (max_abs_jitter < abs(current_jitter)) {
+							max_abs_jitter = abs(current_jitter);
+						}
+
+						if (lowest_abs_jitter > abs(current_jitter)) {
+							lowest_abs_jitter = abs(current_jitter);
+						}
+
+						running_total_abs_jitter += abs(current_jitter);
+
+						if (use_http == 1) {
+							j = 0;
+							for (int x = 0; x < min(jitter_sample_size, success_counter - 1); x++) {
+								j = j + http_jitterbuffer[x];
+							}
+							current_http_jitter = http_response_time - (j / min(success_counter - 1, jitter_sample_size));
+							//out.pf("rcv_jitter=%0.3f ", http_response_time - (j / min(success_counter - 1, jitter_sample_size)));
+							out.pf("rcv_jitter=%0.3f ", current_http_jitter);
+
+							if (max_abs_http_jitter < abs(current_http_jitter)) {
+								max_abs_http_jitter = abs(current_http_jitter);
+							}
+
+							if (lowest_abs_http_jitter > abs(current_http_jitter)) {
+								lowest_abs_http_jitter = abs(current_http_jitter);
+							}
+
+							running_total_abs_http_jitter += abs(current_http_jitter);
+						}
+					}
+				}
+
+				if (success_flag == 1 && jitter_sample_size > 0) {
+					jitterbuffer[jitterpos] = response_time;
+					http_jitterbuffer[jitterpos] = http_response_time;
+					jitterpos++;
+
+					// simple rolling average - go back to the beginning of the array once we fill it
+					if (jitterpos == jitter_sample_size) {
+						jitterpos = 0;
+					}
+				}
+
+
+				COLOR_RESET(use_color);
+				out.p("\n");
+
+
+				loopcounter++;
+				if ((loopcounter == times_to_ping) || ((auto_exit_on_success == 1) && (success_counter > 0))) {
 					break;
 				}
-				if (found == 0) {
-					out.pf("DNS: No valid host found in AddrInfo for that type\n");
-				}	 
+
+				if (sequential_failure_counter >= giveup_count && giveup_count != 0) {
+					break;
+				}
+
 			}
-        }
-
-        if (include_timestamp == 1) {
-			errno_t err;
-            //_strtime( timeStr );
-			_strtime_s(timeStr, sizeof(timeStr));
-			
-            time ( &rawtime );
-			
-            //timeinfo = localtime ( &rawtime );
-			err = localtime_s(&timeinfo, &rawtime);
-			
-            strftime(dateStr, 11, "%Y:%m:%d",&timeinfo);
-            out.pf("%s %s ", dateStr, timeStr);
-        }
-
-        if (have_valid_target == 1) {
-
-            SOCKET sd;
-
-            // apparently... QueryPerformanceCounter isn't thread safe unless we do this
-            SetThreadAffinityMask(GetCurrentThread(),1);
-
-            // start the timer right before we do the connection
-            QueryPerformanceFrequency((LARGE_INTEGER *)&cpu_frequency);
-            QueryPerformanceCounter((LARGE_INTEGER *) &response_timer1);
-
-            // Connect to the server
-            if (use_http == 0) {
-                sd = EstablishConnection(AI, ping_timeout, force_send_byte, SRCAI, errorcode_stash, blocking);
-            } else {
-                sd = HTTP_EstablishConnection(AI, SRCAI);
-            }
-
-            // grab the timeout as early as possible
-            QueryPerformanceCounter((LARGE_INTEGER *) &response_timer2);
-
-            if (sd == INVALID_SOCKET) {
-			
-				if (only_changes == 1) {
-					if (last_cycle_success == false) 
-					{
-						// no change, so kill the output
-						out.enable(false);
-						number_same_cycles += 1;
-					} else {
-						out.enable(true);
-						if (number_of_pings > 0) {
-							out.pf("(%d successful)\n", number_same_cycles);
-						}
-						number_same_cycles = 0;
-					}
-					last_cycle_success = false;
-				}
-				std::string abuffer;
-				formatIP(abuffer, AI);
-				
-				COLOR_RED(use_color);
-				if (always_print_domain == 0) {
-					out.pf("Probing %s:%d/tcp - ", abuffer.c_str(), nPort);
-				}
-				else {
-					out.pf("Probing %s:%d/tcp - ", pcHost, nPort);
-				}
-
-				//if (WSAGetLastError() != 0) {
-				if (errorcode_stash != 0) {
-					out.p( WSAGetLastErrorMessage("",errorcode_stash));
-					
-				} else {
-					out.p( "No response" );
-				}
-                failure_counter++;
-				sequential_failure_counter++;
-
-                if (beep_mode == 4 || beep_mode == 1 || (beep_mode == 3 && beep_flag == 1)) {
-                    cout << " " << char(7) << "*" << char(7) << "*";
-                }
-                beep_flag = 0;
-            } else {
-			
-				if (only_changes == 1) {
-					if (last_cycle_success == true) 
-					{
-						// no change, so kill the output
-						
-						out.enable(false);
-						number_same_cycles += 1;
-					} else {
-						out.enable(true);
-						if (number_of_pings > 0) {
-							out.pf("(%d unsuccessful)\n", number_same_cycles);
-						}
-
-						number_same_cycles = 0;
-					}
-					last_cycle_success = true;
-					sequential_failure_counter = 0;
-				}
-				
-				std::string abuffer;
-				formatIP(abuffer, AI);
-
-				if (always_print_domain == 0) {	
-					out.pf("Probing %s:%d/tcp - ", abuffer.c_str(), nPort);
-				}
-				else {
-					out.pf("Probing %s:%d/tcp - ", pcHost, nPort);
-				}
-
-                if (use_http == 0) {
-                    out.p("Port is open");
-                    success_counter++;
-                    success_flag = 1;
-                } else {
-                    // consider only incrementing if http response @@
-                    out.p("HTTP is open");
-                    success_counter++;
-                    success_flag = 1;
-
-                    // send http send/response
-                    SetThreadAffinityMask(GetCurrentThread(),1);
-
-                    QueryPerformanceFrequency((LARGE_INTEGER *)&cpu_frequency);
-                    QueryPerformanceCounter((LARGE_INTEGER *) &http_timer1);
-
-                    SendHttp(sd, web_server, docptr, http_cmd, using_proxy, using_credentials, hashed_credentials);
-                    ReadReply(sd, bytes_received, http_status);
-                    QueryPerformanceCounter((LARGE_INTEGER *) &http_timer2);
-					closesocket(sd);
-                }
-
-                if (beep_mode == 4 || beep_mode == 2 || (beep_mode == 3 && beep_flag == 0)) {
-                    cout << " *" << char(7);
-                }
-                beep_flag = 1;
-            }
-            // Shut connection down
-            if (ShutdownConnection(sd)) {
-                // room here for connection shutdown success check...
-            } else {
-                // room here for connection shutdown failure check...
-            }
-
-            response_time=( (double) ( (response_timer2.QuadPart - response_timer1.QuadPart) * (double) 1000.0 / (double) cpu_frequency.QuadPart) );
-            http_response_time=( (double) ( (http_timer2.QuadPart - http_timer1.QuadPart) * (double) 1000.0 / (double) cpu_frequency.QuadPart) );
-
-            out.pf( " - time=%0.3fms ", response_time);
-
-            if (use_http == 1) {
-                if (include_url == 1) {
-                    if (docptr != NULL) {
-                        out.pf( "page:http://%s/%s ",pcHost,docptr);
-                    } else {
-                        out.pf( "page:http://%s ", pcHost);
-                    }
-                }
-
-                out.pf("rcv_time=%0.3f status=%d bytes=%d ", http_response_time, http_status, bytes_received);
-
-                bps = bytes_received * 1000 / http_response_time;
-                bps = bps * 8 / 1000;
-
-                out.pf("kbit/s=~%0.3f ",bps);
-            }
-
-
-            // Calculate the statistics...
-            number_of_pings++;
-
-            if (sd != INVALID_SOCKET) {
-                running_total_ms += response_time;
-
-                if (response_time < lowest_ping) {
-                    lowest_ping = response_time;
-                }
-
-                if (response_time > max_ping) {
-                    max_ping = response_time;
-                }
-
-                if (use_http == 1) {
-
-                    running_total_ms_http += http_response_time;
-
-                    if (http_response_time < lowest_ping_http) {
-                        lowest_ping_http = http_response_time;
-                    }
-
-                    if (http_response_time > max_ping_http) {
-                        max_ping_http = http_response_time;
-                    }
-                }
-            }
-
-            /*
-              Two ways to measure jitter.  If jitter_sample_size == 0, then its a total/times, non inclusive of the current go.
-              Otherwise, we calculate it based on the prior [jitter_sample_size] values, non inclusive.
-             */
-
-            if (include_jitter == 1 && success_counter > 1) {
-                if (jitter_sample_size == 0) {
-                    // we didn't specify a sample size, so no rolling average
-
-					current_jitter = response_time - ((running_total_ms - response_time) / (success_counter - 1));
-
-					//out.pf("jitter=%0.3f ", response_time - ((running_total_ms - response_time) / (success_counter - 1)));
-					out.pf("jitter=%0.3f ", current_jitter);
-
-					if (max_abs_jitter < abs(current_jitter)) {
-						max_abs_jitter = abs(current_jitter);
-					}
-
-					if (lowest_abs_jitter > abs(current_jitter)) {
-						lowest_abs_jitter = abs(current_jitter);
-					}
-
-					running_total_abs_jitter += abs(current_jitter);
-
-                    if (use_http == 1) {
-
-						current_http_jitter = http_response_time - ((running_total_ms_http - http_response_time) / (success_counter - 1));
-						//out.pf("rcv_jitter=%0.3f ", http_response_time - ((running_total_ms_http - http_response_time) / (success_counter - 1)));
-						out.pf("rcv_jitter=%0.3f ", current_http_jitter);
-
-						if (max_abs_http_jitter < abs(current_http_jitter)) {
-							max_abs_http_jitter = abs(current_http_jitter);
-						}
-
-						if (lowest_abs_http_jitter > abs(current_http_jitter)) {
-							lowest_abs_http_jitter = abs(current_http_jitter);
-						}
-
-						running_total_abs_http_jitter += abs(current_http_jitter);
-                    }
-
-                } else {
-
-                    j = 0;
-
-                    for (int x=0; x< min(jitter_sample_size, success_counter - 1); x++) {
-
-                        j = j + jitterbuffer[x];
-
-                    }
-					current_jitter = response_time - (j / min(success_counter - 1, jitter_sample_size));
-					//out.pf("jitter=%0.3f ", response_time - (j / min(success_counter - 1, jitter_sample_size)));
-					out.pf("jitter=%0.3f ", current_jitter);
-
-					if (max_abs_jitter < abs(current_jitter)) {
-						max_abs_jitter = abs(current_jitter);
-					}
-
-					if (lowest_abs_jitter > abs(current_jitter)) {
-						lowest_abs_jitter = abs(current_jitter);
-					}
-
-					running_total_abs_jitter += abs(current_jitter);
-
-                    if (use_http == 1) {
-                        j = 0;
-                        for (int x=0; x< min(jitter_sample_size, success_counter - 1); x++) {
-                            j = j + http_jitterbuffer[x];
-                        }
-						current_http_jitter = http_response_time - (j / min(success_counter - 1, jitter_sample_size));
-						//out.pf("rcv_jitter=%0.3f ", http_response_time - (j / min(success_counter - 1, jitter_sample_size)));
-						out.pf("rcv_jitter=%0.3f ", current_http_jitter);
-
-						if (max_abs_http_jitter < abs(current_http_jitter)) {
-							max_abs_http_jitter = abs(current_http_jitter);
-						}
-
-						if (lowest_abs_http_jitter > abs(current_http_jitter)) {
-							lowest_abs_http_jitter = abs(current_http_jitter);
-						}
-
-						running_total_abs_http_jitter += abs(current_http_jitter);
-                    }
-                }
-            }
-
-            if (success_flag == 1 && jitter_sample_size > 0) {
-                jitterbuffer[jitterpos] = response_time;
-                http_jitterbuffer[jitterpos] = http_response_time;
-                jitterpos++;
-
-                // simple rolling average - go back to the beginning of the array once we fill it
-                if (jitterpos == jitter_sample_size) {
-                    jitterpos = 0;
-                }
-            }
-
-
-			COLOR_RESET(use_color);
-            out.p("\n");
-
-
-            loopcounter++;
-            if ((loopcounter == times_to_ping) || ((auto_exit_on_success == 1) && (success_counter > 0))) {
-                break;
-            }
-
-			if (sequential_failure_counter >= giveup_count && giveup_count != 0) {
-				break;
+			else {
+				// no valid target
+				response_time = 0;
+				deferred_counter++;
+				out.p("No host to ping.\n");
 			}
 
-        } else {
-            // no valid target
-            response_time = 0;
-            deferred_counter++;
-            out.p("No host to ping.\n");
-        }
-
-        int zzz = 0;
-        double wakeup = (ping_interval * 1000) - response_time;
-        if (wakeup > 0 ) {
-            while (zzz < wakeup && CTRL_C_ABORT ==0) {
-                Sleep(10);
-                zzz += 10;
-            }
-        }
-    }
+			if (++it == end)
+			{
+				int zzz = 0;
+				double wakeup = (ping_interval * 1000) - response_time;
+				if (wakeup > 0) {
+					while (zzz < wakeup && CTRL_C_ABORT == 0) {
+						Sleep(10);
+						zzz += 10;
+					}
+				}
+			}
+		}
+	}
 
 	out.enable(true);
 
@@ -741,8 +761,10 @@ int DoWinsock(char* pcHost, int nPort, int times_to_ping, double ping_interval, 
 			abuffer = pcHost;
 		}
 		
-		out.pf("\nPing statistics for %s:%d\n", abuffer.c_str(), nPort);
-		out.pf("     %d probes sent. \n", number_of_pings);
+		out.pf("\nPing statistics for %s:", abuffer.c_str());
+		for(int nPort : ports)
+			out.pf("%d ", nPort);
+		out.pf("\n     %d probes sent. \n", number_of_pings);
 
 		float fail_percent = 100 * (float)failure_counter / ((float)success_counter + (float)failure_counter);
 
@@ -969,7 +991,7 @@ void formatIP(std::string &abuffer, ADDRINFO* address) {
 }
 
 
-int DoWinsock_Single(char* pcHost, int nPort, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
+int DoWinsock_Single(char* pcHost, std::list<int> nPort, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
 	
 	int retval;
 	
@@ -977,7 +999,22 @@ int DoWinsock_Single(char* pcHost, int nPort, int times_to_ping, double ping_int
 	return retval;
 }
 
-int DoWinsock_Multi(char* pcHost, int nPort, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, int file_times_to_loop, char* urlfile, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
+static std::stringstream& operator<<(std::stringstream& ss, const std::list<int>& ports)
+{
+	bool first = false;
+	for (auto n : ports)
+	{
+		if (first)
+			first = false;
+		else
+			ss << ",";
+
+		ss << n;
+	}
+	return ss;
+}
+
+int DoWinsock_Multi(char* pcHost, std::list<int> nPort, int times_to_ping, double ping_interval, int include_timestamp, int beep_mode, int ping_timeout, int relookup_interval, int auto_exit_on_success, int force_send_byte, int include_url, int use_http, char* docptr, int http_cmd, int include_jitter, int jitter_sample_size, char* logfile, int use_logfile, int ipv, char* proxy_server, int proxy_port, int using_credentials, char* proxy_credentials, int only_changes, int no_statistics, int giveup_count, int file_times_to_loop, char* urlfile, tee &out, int use_source_address, char *src_address, bool blocking, int always_print_domain, int use_color) {
 	
 	int retval;
 
@@ -992,14 +1029,12 @@ int DoWinsock_Multi(char* pcHost, int nPort, int times_to_ping, double ping_inte
 		{
 			std::stringstream ss(line);
 			std::string line_ip;
-			int line_port;
+			int line_port = -1;
 
 			if (ss >> line_ip) {
-				if (ss >> line_port) {
+				if (ss >> line_port ) {
 					//out.p("success");
-				}
-				else {
-					line_port = nPort;
+					nPort = std::list<int>{ line_port };
 				}
 			}
 			else {
@@ -1009,8 +1044,6 @@ int DoWinsock_Multi(char* pcHost, int nPort, int times_to_ping, double ping_inte
 			char pcHost_f[255];
 			//strcpy_s(pcHost_f, sizeof(pcHost_f), line.c_str());
 			strcpy_s(pcHost_f, sizeof(pcHost_f), line_ip.c_str());
-			
-			nPort = line_port;
 
 			retval = DoWinsock(pcHost_f, nPort, times_to_ping, ping_interval, include_timestamp, beep_mode, ping_timeout, relookup_interval, auto_exit_on_success, force_send_byte, include_url, use_http, docptr, http_cmd, include_jitter, jitter_sample_size, logfile, use_logfile, ipv, proxy_server, proxy_port, using_credentials, proxy_credentials, only_changes, no_statistics, giveup_count, out, use_source_address, src_address, blocking, always_print_domain, use_color);
 			
